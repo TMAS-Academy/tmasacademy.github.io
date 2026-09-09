@@ -7,7 +7,11 @@
 
 <br />
 <div align="center">
-    <h1>TMAS Academy Website</h1>
-    <h2>This repository contains code for the official TMAS Academy website. It is currently in developent and is NOT yet production-ready.</h2>
+    TMAS Academy Website<br>
+    This repository contains code for the official TMAS Academy website. It is currently in developent and is NOT yet production-ready.
 </div>
 <br />
+
+## Prerequisites
+* [Node.js 18+](https://nodejs.org/en)
+* [npm](https://www.npmjs.com/) <b>or</b> [yarn](https://www.npmjs.com/package/yarn)
