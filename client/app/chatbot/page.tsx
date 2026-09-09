@@ -1,0 +1,765 @@
+'use client';
+
+import { useState, useEffect, useRef } from 'react';
+import { Send, Loader2, Bot, User } from 'lucide-react';
+import { marked } from 'marked';
+
+// Configure marked for safe rendering
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
+
+interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+}
+
+function generateUUID(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+export default function ChatbotPage() {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputMessage, setInputMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authToken, setAuthToken] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [isAuthenticating, setIsAuthenticating] = useState(true);
+  const [chatId, setChatId] = useState('');
+  const [isNewChat, setIsNewChat] = useState(true);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-authenticate on mount
+  useEffect(() => {
+    authenticateUser();
+  }, []);
+
+  // Scroll to bottom of messages container (internal scroll only)
+  const scrollToBottom = () => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
+  };
+
+  // Only scroll to bottom when a new assistant message is added (not on user input)
+  const lastMessageRef = useRef<string | null>(null);
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    // Auto-scroll when new message is added or when streaming updates
+    if (lastMessage && lastMessage.id !== lastMessageRef.current) {
+      lastMessageRef.current = lastMessage.id;
+      scrollToBottom();
+    } else if (lastMessage && lastMessage.role === 'assistant') {
+      // Also scroll during streaming updates
+      scrollToBottom();
+    }
+  }, [messages]);
+
+  const authenticateUser = async () => {
+    try {
+      setIsAuthenticating(true);
+      setAuthError('');
+
+      const response = await fetch('/api/auth', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json();
+
+      if (data.success && data.token) {
+        setAuthToken(data.token);
+        setIsAuthenticated(true);
+        setIsAuthenticating(false);
+        console.log('Authentication successful');
+      } else {
+        setAuthError(data.error || 'Authentication failed');
+        setIsAuthenticating(false);
+      }
+    } catch (error) {
+      console.error('Error during authentication:', error);
+      setAuthError('Failed to connect to authentication service');
+      setIsAuthenticating(false);
+    }
+  };
+
+  const sendMessage = async () => {
+    if (!inputMessage.trim() || !isAuthenticated || isLoading) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: inputMessage.trim(),
+      timestamp: new Date(),
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+    setInputMessage('');
+    setIsLoading(true);
+
+    // Generate chatId for new chat
+    const currentChatId = chatId || generateUUID();
+    if (!chatId) {
+      setChatId(currentChatId);
+    }
+
+    try {
+      console.log('Sending message to API...');
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: userMessage.content,
+          conversationHistory: messages.map((msg) => ({
+            role: msg.role,
+            content: msg.content,
+          })),
+          idToken: authToken,
+          chatId: currentChatId,
+          createNewChat: isNewChat,
+        }),
+      });
+
+      console.log('Response received:', response.status, response.statusText);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API error response:', errorText);
+        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+      }
+
+      // Mark as no longer new chat after first message
+      if (isNewChat) {
+        setIsNewChat(false);
+      }
+
+      // Handle streaming response
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let assistantContent = '';
+      const assistantMessageId = (Date.now() + 1).toString();
+
+      console.log('Starting stream reading...');
+
+      if (reader) {
+        let buffer = '';
+        let chunkCount = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          chunkCount++;
+
+          if (done) {
+            console.log(`Stream complete after ${chunkCount} chunks`);
+            break;
+          }
+
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
+
+          // Try to parse JSON objects from the buffer
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.trim()) {
+              try {
+                const parsed = JSON.parse(line);
+                if (parsed.content) {
+                  assistantContent = parsed.content;
+
+                  // Update or add assistant message
+                  setMessages((prev) => {
+                    const existingIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+                    const assistantMessage: Message = {
+                      id: assistantMessageId,
+                      role: 'assistant',
+                      content: assistantContent,
+                      timestamp: new Date(),
+                    };
+
+                    if (existingIndex >= 0) {
+                      const updated = [...prev];
+                      updated[existingIndex] = assistantMessage;
+                      return updated;
+                    } else {
+                      return [...prev, assistantMessage];
+                    }
+                  });
+                }
+              } catch {
+                // Incomplete JSON, continue
+              }
+            }
+          }
+        }
+
+        // Process any remaining buffer
+        if (buffer.trim()) {
+          try {
+            const parsed = JSON.parse(buffer);
+            if (parsed.content) {
+              assistantContent = parsed.content;
+              setMessages((prev) => {
+                const existingIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+                const assistantMessage: Message = {
+                  id: assistantMessageId,
+                  role: 'assistant',
+                  content: assistantContent,
+                  timestamp: new Date(),
+                };
+
+                if (existingIndex >= 0) {
+                  const updated = [...prev];
+                  updated[existingIndex] = assistantMessage;
+                  return updated;
+                } else {
+                  return [...prev, assistantMessage];
+                }
+              });
+            }
+          } catch {
+            // Ignore parse errors on final buffer
+          }
+        }
+      } else {
+        // Fallback for non-streaming response
+        const data = await response.json();
+        const assistantMessage: Message = {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: data.content || data.response || data.message || 'No response received',
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+      console.error('Error details:', {
+        name: error instanceof Error ? error.name : 'Unknown',
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `Sorry, I encountered an error processing your request: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+      inputRef.current?.focus();
+    }
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  if (isAuthenticating) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: 'var(--bg-primary)',
+          padding: '2rem',
+        }}
+      >
+        <div style={{ textAlign: 'center' }}>
+          <Loader2
+            size={48}
+            style={{
+              color: 'var(--accent-yellow)',
+              animation: 'spin 1s linear infinite',
+              margin: '0 auto 1rem',
+            }}
+          />
+          <p style={{ color: 'var(--text-secondary)', fontSize: '1.125rem' }}>
+            Authenticating...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (authError) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: 'var(--bg-primary)',
+          padding: '2rem',
+        }}
+      >
+        <div
+          style={{
+            maxWidth: '32rem',
+            background: 'var(--bg-secondary)',
+            border: '1px solid rgba(255, 107, 0, 0.3)',
+            borderRadius: '1rem',
+            padding: '2rem',
+            textAlign: 'center',
+          }}
+        >
+          <h2 style={{ color: 'var(--accent-orange)', fontSize: '1.5rem', marginBottom: '1rem' }}>
+            Authentication Failed
+          </h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+            {authError}
+          </p>
+          <button
+            onClick={authenticateUser}
+            style={{
+              background: 'var(--accent-yellow)',
+              color: 'var(--bg-primary)',
+              padding: '0.75rem 1.5rem',
+              borderRadius: '0.5rem',
+              fontWeight: 600,
+              border: 'none',
+              cursor: 'pointer',
+              transition: 'all 0.3s',
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.background = 'var(--accent-amber)';
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.background = 'var(--accent-yellow)';
+            }}
+          >
+            Retry Authentication
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        height: '100vh',
+        backgroundColor: 'var(--bg-primary)',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          background: 'var(--bg-secondary)',
+          borderBottom: '1px solid var(--glass-border)',
+          padding: '1.5rem 2rem',
+          flexShrink: 0,
+          zIndex: 10,
+        }}
+      >
+        <div style={{ maxWidth: '56rem', margin: '0 auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div
+              style={{
+                background: 'var(--accent-yellow)',
+                borderRadius: '0.5rem',
+                padding: '0.5rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Bot size={24} style={{ color: 'var(--bg-primary)' }} />
+            </div>
+            <div>
+              <h1 style={{ color: 'var(--text-primary)', fontSize: '1.5rem', fontWeight: 700 }}>
+                TMAS AI Assistant
+              </h1>
+              <p style={{ color: 'var(--text-tertiary)', fontSize: '0.875rem' }}>
+                Ask me anything about math and science
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Messages Container */}
+      <div
+        ref={messagesContainerRef}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '2rem 1rem',
+        }}
+      >
+        <div style={{ maxWidth: '56rem', margin: '0 auto' }}>
+          {messages.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '4rem 1rem' }}>
+              <Bot
+                size={64}
+                style={{
+                  color: 'var(--text-tertiary)',
+                  margin: '0 auto 1.5rem',
+                  opacity: 0.5,
+                }}
+              />
+              <h2 style={{ color: 'var(--text-primary)', fontSize: '1.5rem', marginBottom: '0.5rem' }}>
+                Start a conversation
+              </h2>
+              <p style={{ color: 'var(--text-secondary)' }}>
+                Ask me questions about AP courses, math concepts, physics problems, or study tips!
+              </p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+              {messages.map((message) => (
+                <div
+                  key={message.id}
+                  style={{
+                    display: 'flex',
+                    gap: '1rem',
+                    alignItems: 'flex-start',
+                  }}
+                >
+                  {/* Avatar */}
+                  <div
+                    style={{
+                      flexShrink: 0,
+                      width: '2.5rem',
+                      height: '2.5rem',
+                      borderRadius: '0.5rem',
+                      background:
+                        message.role === 'user'
+                          ? 'var(--bg-tertiary)'
+                          : 'var(--accent-yellow)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    {message.role === 'user' ? (
+                      <User size={20} style={{ color: 'var(--text-primary)' }} />
+                    ) : (
+                      <Bot size={20} style={{ color: 'var(--bg-primary)' }} />
+                    )}
+                  </div>
+
+                  {/* Message Content */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      className={message.role === 'assistant' ? 'markdown-content' : ''}
+                      style={{
+                        background:
+                          message.role === 'user'
+                            ? 'var(--bg-tertiary)'
+                            : 'var(--bg-secondary)',
+                        border: '1px solid var(--glass-border)',
+                        borderRadius: '0.75rem',
+                        padding: '1rem 1.25rem',
+                        color: 'var(--text-secondary)',
+                        fontSize: '1rem',
+                        lineHeight: '1.6',
+                        whiteSpace: message.role === 'user' ? 'pre-wrap' : 'normal',
+                        wordWrap: 'break-word',
+                      }}
+                      dangerouslySetInnerHTML={
+                        message.role === 'assistant'
+                          ? { __html: marked.parse(message.content) as string }
+                          : undefined
+                      }
+                    >
+                      {message.role === 'user' ? message.content : null}
+                    </div>
+                    <div
+                      style={{
+                        color: 'var(--text-tertiary)',
+                        fontSize: '0.75rem',
+                        marginTop: '0.5rem',
+                        paddingLeft: '0.25rem',
+                      }}
+                    >
+                      {message.timestamp.toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {/* Loading Indicator */}
+              {isLoading && (
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+                  <div
+                    style={{
+                      flexShrink: 0,
+                      width: '2.5rem',
+                      height: '2.5rem',
+                      borderRadius: '0.5rem',
+                      background: 'var(--accent-yellow)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Bot size={20} style={{ color: 'var(--bg-primary)' }} />
+                  </div>
+                  <div
+                    style={{
+                      background: 'var(--bg-secondary)',
+                      border: '1px solid var(--glass-border)',
+                      borderRadius: '0.75rem',
+                      padding: '1rem 1.25rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <Loader2
+                      size={16}
+                      style={{
+                        color: 'var(--accent-yellow)',
+                        animation: 'spin 1s linear infinite',
+                      }}
+                    />
+                    <span style={{ color: 'var(--text-tertiary)' }}>Thinking...</span>
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Input Area */}
+      <div
+        style={{
+          background: 'var(--bg-secondary)',
+          borderTop: '1px solid var(--glass-border)',
+          padding: '1.5rem 1rem',
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ maxWidth: '56rem', margin: '0 auto' }}>
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.75rem',
+              alignItems: 'flex-end',
+            }}
+          >
+            <input
+              ref={inputRef}
+              type="text"
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              onKeyPress={handleKeyPress}
+              placeholder="Type your message..."
+              disabled={isLoading}
+              style={{
+                flex: 1,
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--glass-border)',
+                borderRadius: '0.75rem',
+                padding: '1rem 1.25rem',
+                color: 'var(--text-primary)',
+                fontSize: '1rem',
+                outline: 'none',
+                transition: 'border-color 0.3s',
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = 'var(--accent-yellow)';
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = 'var(--glass-border)';
+              }}
+            />
+            <button
+              onClick={sendMessage}
+              disabled={!inputMessage.trim() || isLoading}
+              style={{
+                background: inputMessage.trim() && !isLoading
+                  ? 'var(--accent-yellow)'
+                  : 'var(--bg-tertiary)',
+                color: inputMessage.trim() && !isLoading
+                  ? 'var(--bg-primary)'
+                  : 'var(--text-tertiary)',
+                padding: '1rem',
+                borderRadius: '0.75rem',
+                border: 'none',
+                cursor: inputMessage.trim() && !isLoading ? 'pointer' : 'not-allowed',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.3s',
+                minWidth: '3.5rem',
+                height: '3.5rem',
+              }}
+              onMouseOver={(e) => {
+                if (inputMessage.trim() && !isLoading) {
+                  e.currentTarget.style.background = 'var(--accent-amber)';
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                }
+              }}
+              onMouseOut={(e) => {
+                if (inputMessage.trim() && !isLoading) {
+                  e.currentTarget.style.background = 'var(--accent-yellow)';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                }
+              }}
+            >
+              <Send size={20} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <style jsx global>{`
+        @keyframes spin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        /* Markdown content styles */
+        .markdown-content h1,
+        .markdown-content h2,
+        .markdown-content h3,
+        .markdown-content h4,
+        .markdown-content h5,
+        .markdown-content h6 {
+          color: var(--text-primary);
+          margin-top: 1em;
+          margin-bottom: 0.5em;
+          font-weight: 600;
+        }
+
+        .markdown-content h1 { font-size: 1.5em; }
+        .markdown-content h2 { font-size: 1.3em; }
+        .markdown-content h3 { font-size: 1.1em; }
+
+        .markdown-content p {
+          margin-bottom: 0.75em;
+        }
+
+        .markdown-content p:last-child {
+          margin-bottom: 0;
+        }
+
+        .markdown-content a {
+          color: var(--accent-yellow);
+          text-decoration: underline;
+        }
+
+        .markdown-content a:hover {
+          color: var(--accent-amber);
+        }
+
+        .markdown-content strong {
+          color: var(--text-primary);
+          font-weight: 600;
+        }
+
+        .markdown-content em {
+          font-style: italic;
+        }
+
+        .markdown-content code {
+          background: var(--bg-tertiary);
+          color: var(--accent-yellow);
+          padding: 0.15em 0.4em;
+          border-radius: 4px;
+          font-family: 'Consolas', 'Monaco', monospace;
+          font-size: 0.9em;
+        }
+
+        .markdown-content pre {
+          background: var(--bg-tertiary);
+          border: 1px solid var(--glass-border);
+          border-radius: 8px;
+          padding: 1em;
+          overflow-x: auto;
+          margin: 0.75em 0;
+        }
+
+        .markdown-content pre code {
+          background: transparent;
+          padding: 0;
+          color: var(--text-secondary);
+        }
+
+        .markdown-content ul,
+        .markdown-content ol {
+          margin: 0.5em 0;
+          padding-left: 1.5em;
+        }
+
+        .markdown-content li {
+          margin-bottom: 0.25em;
+        }
+
+        .markdown-content li::marker {
+          color: var(--accent-yellow);
+        }
+
+        .markdown-content blockquote {
+          border-left: 3px solid var(--accent-yellow);
+          padding-left: 1em;
+          margin: 0.75em 0;
+          color: var(--text-tertiary);
+          font-style: italic;
+        }
+
+        .markdown-content table {
+          width: 100%;
+          border-collapse: collapse;
+          margin: 0.75em 0;
+        }
+
+        .markdown-content th,
+        .markdown-content td {
+          border: 1px solid var(--glass-border);
+          padding: 0.5em;
+          text-align: left;
+        }
+
+        .markdown-content th {
+          background: var(--bg-tertiary);
+          color: var(--accent-yellow);
+          font-weight: 600;
+        }
+
+        .markdown-content hr {
+          border: none;
+          border-top: 1px solid var(--glass-border);
+          margin: 1em 0;
+        }
+      `}</style>
+    </div>
+  );
+}
