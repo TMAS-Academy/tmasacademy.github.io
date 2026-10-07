@@ -1,4 +1,5 @@
-import Navbar from './components/Navbar.tsx';
+import Navbar from './components/Navbar';
+import Footer from './components/Footer';
 
 function App() {
   return (
@@ -6,9 +7,13 @@ function App() {
       <Navbar title="TMAS Academy" />
 
       <main>
-        <h1>TMAS Academy</h1>
-        <p>Free STEM Education for Everyone</p>
+        <h1>Free STEM Education for Everyone</h1>
+        <p>
+          High-quality STEM resources made freely accessible to everyone.
+        </p>
       </main>
+
+      <Footer />
     </>
   );
 }

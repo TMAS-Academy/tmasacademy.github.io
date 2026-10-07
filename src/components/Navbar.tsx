@@ -3,9 +3,21 @@ interface NavbarProps {
 }
 
 function Navbar({ title }: NavbarProps) {
+  const links = ['About', 'Books', 'Community', 'Contact'];
+
   return (
     <nav>
-      <h1>{title}</h1>
+      <a href="/" className="navbar-logo">
+        {title}
+      </a>
+
+      <div className="navbar-links">
+        {links.map((link) => (
+          <a href={`/${link.toLowerCase()}`} key={link}>
+            {link}
+          </a>
+        ))}
+      </div>
     </nav>
   );
 }
