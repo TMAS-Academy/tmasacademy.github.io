@@ -1,48 +1,19 @@
-interface Book {
-  title: string;
-  subject: string;
-  description: string;
-}
-
 function FeaturedBooks() {
-  const books: Book[] = [
-    {
-      title: 'AP Chemistry',
-      subject: 'Chemistry',
-      description: 'A comprehensive guide for AP Chemistry.',
-    },
-    {
-      title: 'Multivariable Calculus',
-      subject: 'Mathematics',
-      description: 'A comprehensive guide to multivariable calculus.',
-    },
-    {
-      title: 'Differential Equations & Linear Algebra',
-      subject: 'Mathematics',
-      description: 'A guide covering differential equations and linear algebra.',
-    },
-  ];
-
   return (
     <section className="featured-books">
       <div className="section-content">
-        <p className="section-eyebrow">Study Guides</p>
+        <p className="section-eyebrow">Featured Books</p>
 
-        <h2>Featured Books</h2>
+        <h2>Explore our STEM study guides.</h2>
 
-        <div className="book-grid">
-          {books.map((book) => (
-            <article className="book-card" key={book.title}>
-              <p className="book-subject">{book.subject}</p>
+        <p>
+          Comprehensive books covering AP STEM courses, competitive
+          mathematics, and college-level STEM topics.
+        </p>
 
-              <h3>{book.title}</h3>
-
-              <p>{book.description}</p>
-
-              <a href="/books">View Book</a>
-            </article>
-          ))}
-        </div>
+        <a href="/books" className="section-button">
+          Explore All Books
+        </a>
       </div>
     </section>
   );
