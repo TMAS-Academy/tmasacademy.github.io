@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom';
-import Logo from './Logo';
 import { navLinks } from './Navbar';
 import { site } from '../data/site';
 import { categories } from '../data/books';
@@ -12,7 +11,7 @@ export default function Footer() {
       <div className="container footer-grid">
         <div className="footer-about">
           <Link to="/" className="brand" aria-label={`${site.name} home`}>
-            <Logo />
+            <img src="/logo.png" alt="" width="32" height="32" />
             <span>{site.name}</span>
           </Link>
           <p>

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
-import Logo from './Logo';
 import { site } from '../data/site';
 
 export const navLinks = [
@@ -30,7 +29,7 @@ export default function Navbar() {
     <header className="site-header">
       <div className="container nav">
         <Link to="/" className="brand" aria-label={`${site.name} home`}>
-          <Logo />
+          <img src="/logo.png" alt="" width="32" height="32" />
           <span>{site.name}</span>
         </Link>
 
